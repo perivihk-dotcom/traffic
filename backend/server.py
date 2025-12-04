@@ -133,6 +133,38 @@ class ModelInfo(BaseModel):
     classes: List[str]
     description: str
 
+class BatchPredictionInput(BaseModel):
+    records: List[PredictionInput]
+
+class BatchPredictionResult(BaseModel):
+    total_records: int
+    predictions: List[PredictionResult]
+    summary: Dict[str, Any]
+
+class RouteCompareInput(BaseModel):
+    route1: PredictionInput
+    route2: PredictionInput
+
+class RouteCompareResult(BaseModel):
+    route1: Dict[str, Any]
+    route2: Dict[str, Any]
+    safer_route: int
+    risk_difference: float
+    recommendation: str
+
+class AlertConfig(BaseModel):
+    threshold_fatal: float = Field(default=0.3, ge=0, le=1)
+    threshold_serious: float = Field(default=0.5, ge=0, le=1)
+
+class RiskAlert(BaseModel):
+    id: str
+    severity: str
+    risk_level: int
+    alert_type: str
+    message: str
+    timestamp: datetime
+    input_features: Dict[str, Any]
+
 # ============== API Endpoints ==============
 
 @api_router.get("/")
