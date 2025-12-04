@@ -1,11 +1,13 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import "@/App.css";
 import axios from "axios";
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar
+  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, AreaChart, Area
 } from "recharts";
+import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -27,8 +29,11 @@ const Navigation = ({ activeTab, setActiveTab }) => {
   const tabs = [
     { id: "dashboard", label: "Dashboard", icon: "📊" },
     { id: "predict", label: "Risk Prediction", icon: "🎯" },
+    { id: "map", label: "Accident Map", icon: "🗺️" },
     { id: "analysis", label: "Data Analysis", icon: "📈" },
-    { id: "factors", label: "Key Factors", icon: "🔑" }
+    { id: "factors", label: "Key Factors", icon: "🔑" },
+    { id: "model", label: "Model Info", icon: "🤖" },
+    { id: "history", label: "History", icon: "📜" }
   ];
 
   return (
@@ -39,19 +44,18 @@ const Navigation = ({ activeTab, setActiveTab }) => {
             <span className="text-2xl">🚗</span>
             <h1 className="text-xl font-bold text-white">Traffic Accident Risk Predictor</h1>
           </div>
-          <div className="flex space-x-1">
+          <div className="flex space-x-1 overflow-x-auto">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 data-testid={`nav-${tab.id}`}
                 onClick={() => setActiveTab(tab.id)}
-                className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
-                  activeTab === tab.id
+                className={`px-3 py-2 rounded-lg font-medium transition-all duration-200 whitespace-nowrap text-sm ${activeTab === tab.id
                     ? "bg-blue-600 text-white"
                     : "text-slate-300 hover:bg-slate-800 hover:text-white"
-                }`}
+                  }`}
               >
-                <span className="mr-2">{tab.icon}</span>
+                <span className="mr-1">{tab.icon}</span>
                 {tab.label}
               </button>
             ))}
@@ -89,7 +93,7 @@ const StatCard = ({ title, value, subtitle, icon, color = "blue" }) => {
 };
 
 // Dashboard Component
-const Dashboard = ({ stats, temporal }) => {
+const Dashboard = ({ stats, temporal, yearly }) => {
   if (!stats) return <LoadingSpinner />;
 
   const pieData = [
@@ -182,6 +186,27 @@ const Dashboard = ({ stats, temporal }) => {
         </div>
       </div>
 
+      {/* Yearly Trend */}
+      {yearly && yearly.yearly && (
+        <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+          <h3 className="text-lg font-semibold text-white mb-4">Yearly Accident Trends</h3>
+          <ResponsiveContainer width="100%" height={350}>
+            <AreaChart data={yearly.yearly}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis dataKey="year" stroke="#9ca3af" fontSize={12} />
+              <YAxis stroke="#9ca3af" fontSize={12} />
+              <Tooltip
+                contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151" }}
+              />
+              <Legend />
+              <Area type="monotone" dataKey="Slight" stackId="1" stroke={COLORS.slight} fill={COLORS.slight} fillOpacity={0.6} />
+              <Area type="monotone" dataKey="Serious" stackId="1" stroke={COLORS.serious} fill={COLORS.serious} fillOpacity={0.6} />
+              <Area type="monotone" dataKey="Fatal" stackId="1" stroke={COLORS.fatal} fill={COLORS.fatal} fillOpacity={0.6} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
       {/* Weekly & Monthly Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
@@ -235,6 +260,146 @@ const Dashboard = ({ stats, temporal }) => {
           </ResponsiveContainer>
         </div>
       )}
+    </div>
+  );
+};
+
+// Accident Map Component
+const MapLegend = () => (
+  <div className="absolute bottom-4 left-4 bg-slate-800 p-3 rounded-lg border border-slate-700 z-[1000]">
+    <h4 className="text-sm font-semibold text-white mb-2">Severity Legend</h4>
+    <div className="space-y-1">
+      <div className="flex items-center space-x-2">
+        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS.slight }}></div>
+        <span className="text-xs text-slate-300">Slight</span>
+      </div>
+      <div className="flex items-center space-x-2">
+        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS.serious }}></div>
+        <span className="text-xs text-slate-300">Serious</span>
+      </div>
+      <div className="flex items-center space-x-2">
+        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS.fatal }}></div>
+        <span className="text-xs text-slate-300">Fatal</span>
+      </div>
+    </div>
+  </div>
+);
+
+const AccidentMap = ({ spatialData }) => {
+  const [filterSeverity, setFilterSeverity] = useState("all");
+
+  const filteredPoints = useMemo(() => {
+    if (!spatialData?.points) return [];
+    if (filterSeverity === "all") return spatialData.points;
+    return spatialData.points.filter(p => p.severity_name === filterSeverity);
+  }, [spatialData, filterSeverity]);
+
+  const getMarkerColor = (severity) => {
+    switch (severity) {
+      case 1: return COLORS.slight;
+      case 2: return COLORS.serious;
+      case 3: return COLORS.fatal;
+      default: return COLORS.primary;
+    }
+  };
+
+  if (!spatialData) return <LoadingSpinner />;
+
+  // UK center coordinates
+  const center = [54.0, -2.0];
+
+  return (
+    <div className="space-y-6" data-testid="accident-map">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Accident Hotspot Map</h2>
+          <p className="text-slate-400 mt-1">Geographic distribution of traffic accidents across UK</p>
+        </div>
+        <div className="flex items-center space-x-2">
+          <span className="text-slate-400 text-sm">Filter:</span>
+          <select
+            value={filterSeverity}
+            onChange={(e) => setFilterSeverity(e.target.value)}
+            className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm"
+            data-testid="map-filter"
+          >
+            <option value="all">All Severities ({spatialData.total})</option>
+            <option value="Slight">Slight Only</option>
+            <option value="Serious">Serious Only</option>
+            <option value="Fatal">Fatal Only</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Stats Summary */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+          <p className="text-slate-400 text-sm">Total Points</p>
+          <p className="text-2xl font-bold text-white">{filteredPoints.length}</p>
+        </div>
+        <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+          <p className="text-slate-400 text-sm">Slight</p>
+          <p className="text-2xl font-bold text-green-500">{spatialData.points?.filter(p => p.severity === 1).length || 0}</p>
+        </div>
+        <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+          <p className="text-slate-400 text-sm">Serious</p>
+          <p className="text-2xl font-bold text-yellow-500">{spatialData.points?.filter(p => p.severity === 2).length || 0}</p>
+        </div>
+        <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+          <p className="text-slate-400 text-sm">Fatal</p>
+          <p className="text-2xl font-bold text-red-500">{spatialData.points?.filter(p => p.severity === 3).length || 0}</p>
+        </div>
+      </div>
+
+      {/* Map Container */}
+      <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden relative" style={{ height: "500px" }}>
+        <MapContainer
+          center={center}
+          zoom={6}
+          style={{ height: "100%", width: "100%" }}
+          className="z-0"
+        >
+          <TileLayer
+            url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          />
+          {filteredPoints.map((point, idx) => (
+            <CircleMarker
+              key={point.id || idx}
+              center={[point.latitude, point.longitude]}
+              radius={point.severity === 3 ? 8 : point.severity === 2 ? 6 : 4}
+              fillColor={getMarkerColor(point.severity)}
+              color={getMarkerColor(point.severity)}
+              weight={1}
+              opacity={0.8}
+              fillOpacity={0.6}
+            >
+              <Popup>
+                <div className="text-sm">
+                  <strong>Accident ID:</strong> {point.id}<br />
+                  <strong>Severity:</strong> {point.severity_name}<br />
+                  <strong>Location:</strong> {point.latitude.toFixed(4)}, {point.longitude.toFixed(4)}
+                </div>
+              </Popup>
+            </CircleMarker>
+          ))}
+        </MapContainer>
+        <MapLegend />
+      </div>
+
+      <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+        <h3 className="text-lg font-semibold text-white mb-3">Map Insights</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-slate-400 text-sm">
+          <div>
+            <p>• Urban areas show higher concentration of accidents</p>
+            <p>• Major motorways identified as high-risk corridors</p>
+          </div>
+          <div>
+            <p>• Fatal accidents more common on rural high-speed roads</p>
+            <p>• Junction areas show clusters of serious accidents</p>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
@@ -797,11 +962,10 @@ const KeyFactors = ({ keyFactors }) => {
             key={option.id}
             onClick={() => setSelectedSeverity(option.id)}
             data-testid={`factor-${option.id}`}
-            className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${
-              selectedSeverity === option.id
+            className={`px-4 py-2 rounded-lg font-medium transition-all duration-200 ${selectedSeverity === option.id
                 ? "bg-blue-600 text-white"
                 : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-            }`}
+              }`}
           >
             <span className="mr-2">{option.icon}</span>
             {option.label}
@@ -841,6 +1005,294 @@ const KeyFactors = ({ keyFactors }) => {
   );
 };
 
+// Model Info Page
+const ModelInfo = ({ modelInfo, performance }) => {
+  if (!modelInfo || !performance) return <LoadingSpinner />;
+
+  return (
+    <div className="space-y-6" data-testid="model-info">
+      <div>
+        <h2 className="text-2xl font-bold text-white">Model Information</h2>
+        <p className="text-slate-400 mt-1">CNN-BiLSTM-Attention architecture details and performance metrics</p>
+      </div>
+
+      {/* Model Architecture */}
+      <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+        <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+          <span className="mr-2">🏗️</span> Model Architecture
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
+            <h4 className="text-white font-medium mb-2">Model Name</h4>
+            <p className="text-slate-400">{modelInfo.name}</p>
+            
+            <h4 className="text-white font-medium mt-4 mb-2">Architecture</h4>
+            <p className="text-slate-400">{modelInfo.architecture}</p>
+            
+            <h4 className="text-white font-medium mt-4 mb-2">Number of Features</h4>
+            <p className="text-slate-400">{modelInfo.num_features}</p>
+          </div>
+          <div>
+            <h4 className="text-white font-medium mb-2">Output Classes</h4>
+            <div className="flex space-x-2">
+              {modelInfo.classes.map((cls, i) => (
+                <span key={cls} className="px-3 py-1 rounded-full text-sm" style={{ backgroundColor: SEVERITY_COLORS[i] + '30', color: SEVERITY_COLORS[i] }}>
+                  {cls}
+                </span>
+              ))}
+            </div>
+            
+            <h4 className="text-white font-medium mt-4 mb-2">Description</h4>
+            <p className="text-slate-400 text-sm">{modelInfo.description}</p>
+          </div>
+        </div>
+        
+        {/* Architecture Diagram */}
+        <div className="mt-6 p-4 bg-slate-700/50 rounded-lg">
+          <h4 className="text-white font-medium mb-4 text-center">Model Flow</h4>
+          <div className="flex flex-wrap items-center justify-center gap-2 text-sm">
+            <span className="bg-blue-600 px-3 py-2 rounded text-white">Input Data</span>
+            <span className="text-slate-400">→</span>
+            <span className="bg-purple-600 px-3 py-2 rounded text-white">1D CNN</span>
+            <span className="text-slate-400">→</span>
+            <span className="bg-green-600 px-3 py-2 rounded text-white">Spatial Attention</span>
+            <span className="text-slate-400">→</span>
+            <span className="bg-yellow-600 px-3 py-2 rounded text-white">BiLSTM</span>
+            <span className="text-slate-400">→</span>
+            <span className="bg-orange-600 px-3 py-2 rounded text-white">Temporal Attention</span>
+            <span className="text-slate-400">→</span>
+            <span className="bg-red-600 px-3 py-2 rounded text-white">FC Layer</span>
+            <span className="text-slate-400">→</span>
+            <span className="bg-pink-600 px-3 py-2 rounded text-white">Risk Level</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Performance Metrics */}
+      <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+        <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+          <span className="mr-2">📊</span> Performance Metrics
+        </h3>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="bg-slate-700/50 rounded-lg p-4 text-center">
+            <p className="text-slate-400 text-sm">MAE</p>
+            <p className="text-2xl font-bold text-white">{performance.metrics.mae.toFixed(4)}</p>
+          </div>
+          <div className="bg-slate-700/50 rounded-lg p-4 text-center">
+            <p className="text-slate-400 text-sm">Precision</p>
+            <p className="text-2xl font-bold text-green-500">{(performance.metrics.precision * 100).toFixed(1)}%</p>
+          </div>
+          <div className="bg-slate-700/50 rounded-lg p-4 text-center">
+            <p className="text-slate-400 text-sm">Recall</p>
+            <p className="text-2xl font-bold text-blue-500">{(performance.metrics.recall * 100).toFixed(1)}%</p>
+          </div>
+          <div className="bg-slate-700/50 rounded-lg p-4 text-center">
+            <p className="text-slate-400 text-sm">F1 Score</p>
+            <p className="text-2xl font-bold text-purple-500">{(performance.metrics.f1_score * 100).toFixed(1)}%</p>
+          </div>
+          <div className="bg-slate-700/50 rounded-lg p-4 text-center">
+            <p className="text-slate-400 text-sm">Accuracy</p>
+            <p className="text-2xl font-bold text-yellow-500">{(performance.metrics.accuracy * 100).toFixed(1)}%</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Model Comparison */}
+      <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+        <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+          <span className="mr-2">⚡</span> Model Comparison
+        </h3>
+        <ResponsiveContainer width="100%" height={400}>
+          <BarChart data={performance.comparison} layout="vertical">
+            <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+            <XAxis type="number" stroke="#9ca3af" domain={[0, 1]} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
+            <YAxis type="category" dataKey="model" stroke="#9ca3af" width={150} fontSize={11} />
+            <Tooltip
+              contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151" }}
+              formatter={(v, name) => [`${(v * 100).toFixed(1)}%`, name]}
+            />
+            <Legend />
+            <Bar dataKey="precision" fill={COLORS.slight} name="Precision" />
+            <Bar dataKey="recall" fill={COLORS.serious} name="Recall" />
+            <Bar dataKey="f1" fill={COLORS.primary} name="F1 Score" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Training Info */}
+      <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+        <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+          <span className="mr-2">🎓</span> Training Configuration
+        </h3>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="bg-slate-700/50 rounded-lg p-3">
+            <p className="text-slate-400 text-xs">Epochs</p>
+            <p className="text-lg font-semibold text-white">{performance.training_info.epochs}</p>
+          </div>
+          <div className="bg-slate-700/50 rounded-lg p-3">
+            <p className="text-slate-400 text-xs">Batch Size</p>
+            <p className="text-lg font-semibold text-white">{performance.training_info.batch_size}</p>
+          </div>
+          <div className="bg-slate-700/50 rounded-lg p-3">
+            <p className="text-slate-400 text-xs">Optimizer</p>
+            <p className="text-lg font-semibold text-white">{performance.training_info.optimizer}</p>
+          </div>
+          <div className="bg-slate-700/50 rounded-lg p-3">
+            <p className="text-slate-400 text-xs">Learning Rate</p>
+            <p className="text-lg font-semibold text-white">{performance.training_info.learning_rate}</p>
+          </div>
+          <div className="bg-slate-700/50 rounded-lg p-3">
+            <p className="text-slate-400 text-xs">Cross-Validation</p>
+            <p className="text-lg font-semibold text-white">{performance.training_info.cross_validation}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Features List */}
+      <div className="bg-slate-800 rounded-xl p-6 border border-slate-700">
+        <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+          <span className="mr-2">📝</span> Input Features ({modelInfo.num_features})
+        </h3>
+        <div className="flex flex-wrap gap-2">
+          {modelInfo.features.map((feature) => (
+            <span key={feature} className="bg-slate-700 px-3 py-1 rounded-full text-sm text-slate-300">
+              {feature}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Prediction History Page
+const PredictionHistory = ({ history, onRefresh }) => {
+  const [loading, setLoading] = useState(false);
+
+  const handleRefresh = async () => {
+    setLoading(true);
+    await onRefresh();
+    setLoading(false);
+  };
+
+  const severityConfig = {
+    Slight: { bg: "bg-green-500/20", text: "text-green-500", icon: "✅" },
+    Serious: { bg: "bg-yellow-500/20", text: "text-yellow-500", icon: "⚠️" },
+    Fatal: { bg: "bg-red-500/20", text: "text-red-500", icon: "🚨" }
+  };
+
+  return (
+    <div className="space-y-6" data-testid="prediction-history">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Prediction History</h2>
+          <p className="text-slate-400 mt-1">View past risk predictions and their results</p>
+        </div>
+        <button
+          onClick={handleRefresh}
+          disabled={loading}
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2 disabled:opacity-50"
+        >
+          <span className={loading ? "animate-spin" : ""}>🔄</span>
+          <span>Refresh</span>
+        </button>
+      </div>
+
+      {!history || history.length === 0 ? (
+        <div className="bg-slate-800 rounded-xl p-12 border border-slate-700 text-center">
+          <span className="text-6xl">📜</span>
+          <h3 className="text-xl font-semibold text-white mt-4">No Predictions Yet</h3>
+          <p className="text-slate-400 mt-2">Make a prediction to see it appear in your history</p>
+        </div>
+      ) : (
+        <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-slate-700">
+                <tr>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300">Timestamp</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300">Severity</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300">Confidence</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300">Slight %</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300">Serious %</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300">Fatal %</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-300">Key Inputs</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700">
+                {history.map((pred, idx) => {
+                  const config = severityConfig[pred.severity];
+                  return (
+                    <tr key={pred.id || idx} className="hover:bg-slate-700/50">
+                      <td className="px-4 py-3 text-sm text-slate-400">
+                        {new Date(pred.timestamp).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`${config.bg} ${config.text} px-3 py-1 rounded-full text-sm font-medium`}>
+                          {config.icon} {pred.severity}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-white font-mono">
+                        {(pred.confidence * 100).toFixed(1)}%
+                      </td>
+                      <td className="px-4 py-3 text-sm text-green-400 font-mono">
+                        {(pred.probabilities.slight * 100).toFixed(1)}%
+                      </td>
+                      <td className="px-4 py-3 text-sm text-yellow-400 font-mono">
+                        {(pred.probabilities.serious * 100).toFixed(1)}%
+                      </td>
+                      <td className="px-4 py-3 text-sm text-red-400 font-mono">
+                        {(pred.probabilities.fatal * 100).toFixed(1)}%
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-400">
+                        {pred.input_features && (
+                          <span>
+                            {pred.input_features.speed_limit}mph, 
+                            {pred.input_features.hour}:00, 
+                            {pred.input_features.number_of_vehicles} vehicles
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Summary Stats */}
+      {history && history.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+            <p className="text-slate-400 text-sm">Total Predictions</p>
+            <p className="text-2xl font-bold text-white">{history.length}</p>
+          </div>
+          <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+            <p className="text-slate-400 text-sm">Avg. Confidence</p>
+            <p className="text-2xl font-bold text-blue-500">
+              {(history.reduce((acc, p) => acc + p.confidence, 0) / history.length * 100).toFixed(1)}%
+            </p>
+          </div>
+          <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+            <p className="text-slate-400 text-sm">Fatal Predictions</p>
+            <p className="text-2xl font-bold text-red-500">
+              {history.filter(p => p.severity === 'Fatal').length}
+            </p>
+          </div>
+          <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+            <p className="text-slate-400 text-sm">High Risk (Fatal)</p>
+            <p className="text-2xl font-bold text-yellow-500">
+              {((history.filter(p => p.severity === 'Fatal').length / history.length) * 100).toFixed(1)}%
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Loading Spinner
 const LoadingSpinner = () => (
   <div className="flex items-center justify-center h-64" data-testid="loading">
@@ -858,29 +1310,53 @@ function App() {
   const [temporal, setTemporal] = useState(null);
   const [environmental, setEnvironmental] = useState(null);
   const [keyFactors, setKeyFactors] = useState(null);
+  const [spatialData, setSpatialData] = useState(null);
+  const [modelInfo, setModelInfo] = useState(null);
+  const [performance, setPerformance] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [yearly, setYearly] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       // Fetch all data in parallel
-      const [statsRes, temporalRes, envRes, factorsRes] = await Promise.all([
+      const [statsRes, temporalRes, envRes, factorsRes, spatialRes, modelRes, perfRes, historyRes, yearlyRes] = await Promise.all([
         axios.get(`${API}/data/statistics`),
         axios.get(`${API}/data/temporal`),
         axios.get(`${API}/data/environmental`),
-        axios.get(`${API}/data/key-factors`)
+        axios.get(`${API}/data/key-factors`),
+        axios.get(`${API}/data/spatial`),
+        axios.get(`${API}/model/info`),
+        axios.get(`${API}/model/performance`),
+        axios.get(`${API}/predictions/history`),
+        axios.get(`${API}/data/yearly`)
       ]);
 
       setStats(statsRes.data);
       setTemporal(temporalRes.data);
       setEnvironmental(envRes.data);
       setKeyFactors(factorsRes.data);
+      setSpatialData(spatialRes.data);
+      setModelInfo(modelRes.data);
+      setPerformance(perfRes.data);
+      setHistory(historyRes.data);
+      setYearly(yearlyRes.data);
     } catch (error) {
       console.error("Failed to fetch data:", error);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const refreshHistory = async () => {
+    try {
+      const historyRes = await axios.get(`${API}/predictions/history`);
+      setHistory(historyRes.data);
+    } catch (error) {
+      console.error("Failed to refresh history:", error);
+    }
+  };
 
   useEffect(() => {
     fetchData();
@@ -893,15 +1369,21 @@ function App() {
 
     switch (activeTab) {
       case "dashboard":
-        return <Dashboard stats={stats} temporal={temporal} />;
+        return <Dashboard stats={stats} temporal={temporal} yearly={yearly} />;
       case "predict":
         return <RiskPrediction />;
+      case "map":
+        return <AccidentMap spatialData={spatialData} />;
       case "analysis":
         return <DataAnalysis stats={stats} environmental={environmental} />;
       case "factors":
         return <KeyFactors keyFactors={keyFactors} />;
+      case "model":
+        return <ModelInfo modelInfo={modelInfo} performance={performance} />;
+      case "history":
+        return <PredictionHistory history={history} onRefresh={refreshHistory} />;
       default:
-        return <Dashboard stats={stats} temporal={temporal} />;
+        return <Dashboard stats={stats} temporal={temporal} yearly={yearly} />;
     }
   };
 
