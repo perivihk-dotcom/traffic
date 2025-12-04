@@ -239,6 +239,63 @@ async def get_key_factors():
     """Get key factors affecting accident severity by level"""
     return get_key_factors_by_severity()
 
+@api_router.get("/model/performance")
+async def get_model_performance():
+    """Get model performance metrics (simulated based on paper results)"""
+    return {
+        "model_name": "CNN-BiLSTM-Attention",
+        "dataset": "UK Road Safety (2015-2020)",
+        "metrics": {
+            "mae": 0.2475,
+            "precision": 0.8191,
+            "recall": 0.8782,
+            "f1_score": 0.8476,
+            "accuracy": 0.8534
+        },
+        "comparison": [
+            {"model": "CNN-BiLSTM-Attention", "mae": 0.2475, "precision": 0.8191, "recall": 0.8782, "f1": 0.8476},
+            {"model": "CNN+BiLSTM", "mae": 0.2612, "precision": 0.7985, "recall": 0.8523, "f1": 0.8245},
+            {"model": "BiLSTM", "mae": 0.2834, "precision": 0.7756, "recall": 0.8245, "f1": 0.7992},
+            {"model": "LSTM", "mae": 0.2956, "precision": 0.7623, "recall": 0.8156, "f1": 0.7881},
+            {"model": "CNN", "mae": 0.3124, "precision": 0.7489, "recall": 0.7934, "f1": 0.7705},
+            {"model": "MLP", "mae": 0.3267, "precision": 0.7312, "recall": 0.7756, "f1": 0.7527},
+            {"model": "Random Forest", "mae": 0.3456, "precision": 0.7156, "recall": 0.7523, "f1": 0.7335},
+            {"model": "SVM", "mae": 0.3678, "precision": 0.6923, "recall": 0.7234, "f1": 0.7075}
+        ],
+        "training_info": {
+            "epochs": 100,
+            "batch_size": 64,
+            "optimizer": "Adam",
+            "learning_rate": 0.001,
+            "cross_validation": "10-fold"
+        }
+    }
+
+@api_router.get("/data/yearly")
+async def get_yearly_data():
+    """Get yearly trend of accidents"""
+    count = await db.accidents.count_documents({})
+    if count == 0:
+        sample_data = generate_sample_accident_data(1000)
+        await db.accidents.insert_many(sample_data)
+    
+    accidents = await db.accidents.find({}, {"_id": 0}).to_list(10000)
+    
+    # Yearly by severity
+    yearly_severity = {}
+    for acc in accidents:
+        year = acc['year']
+        if year not in yearly_severity:
+            yearly_severity[year] = {'Slight': 0, 'Serious': 0, 'Fatal': 0, 'total': 0}
+        yearly_severity[year][acc['severity_name']] += 1
+        yearly_severity[year]['total'] += 1
+    
+    return {
+        'yearly': [
+            {'year': y, **yearly_severity[y]} for y in sorted(yearly_severity.keys())
+        ]
+    }
+
 @api_router.get("/data/spatial")
 async def get_spatial_data():
     """Get spatial distribution of accidents for map visualization"""
