@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Query, UploadFile, File
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -10,6 +11,9 @@ from typing import List, Dict, Optional, Any
 import uuid
 from datetime import datetime, timezone
 import numpy as np
+import csv
+import io
+from fpdf import FPDF
 
 from models.accident_model import AccidentRiskPredictor
 from data.sample_data import generate_sample_accident_data, get_statistics, get_key_factors_by_severity
