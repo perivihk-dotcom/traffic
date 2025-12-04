@@ -243,24 +243,56 @@ class AccidentRiskPredictor:
         }
     
     def get_feature_importance(self, features: Dict) -> List[Dict]:
-        """Calculate feature importance using gradient-based approximation"""
+        """Calculate feature importance using DeepSHAP"""
         x = self.preprocess(features)
         x_tensor = torch.FloatTensor(x).unsqueeze(0)
-        x_tensor.requires_grad = True
         
-        self.model.eval()
-        logits, _ = self.model(x_tensor)
-        
-        # Get gradients for predicted class
-        predicted_class = torch.argmax(logits, dim=1)
-        logits[0, predicted_class].backward()
-        
-        # Feature importance based on gradients
-        gradients = x_tensor.grad.numpy()[0]
-        importance = np.abs(gradients)
-        
-        # Normalize
-        importance = importance / (np.sum(importance) + 1e-10)
+        try:
+            # Create background data for SHAP (use random samples)
+            background = torch.randn(50, len(self.FEATURE_NAMES)) * 0.5 + 0.5
+            background = torch.clamp(background, 0, 1)
+            
+            # Create DeepSHAP explainer
+            self.model.eval()
+            
+            # Wrapper function for SHAP
+            def model_wrapper(x):
+                with torch.no_grad():
+                    logits, _ = self.model(x)
+                    return logits
+            
+            explainer = shap.DeepExplainer(
+                lambda x: model_wrapper(x),
+                background
+            )
+            
+            # Get SHAP values
+            shap_values = explainer.shap_values(x_tensor)
+            
+            # Get predicted class
+            with torch.no_grad():
+                logits, _ = self.model(x_tensor)
+                predicted_class = int(torch.argmax(logits, dim=1).item())
+            
+            # Get importance for predicted class
+            if isinstance(shap_values, list):
+                importance = np.abs(shap_values[predicted_class][0])
+            else:
+                importance = np.abs(shap_values[0])
+            
+            # Normalize
+            importance = importance / (np.sum(importance) + 1e-10)
+            
+        except Exception as e:
+            # Fallback to gradient-based method
+            x_tensor.requires_grad = True
+            self.model.eval()
+            logits, _ = self.model(x_tensor)
+            predicted_class = torch.argmax(logits, dim=1)
+            logits[0, predicted_class].backward()
+            gradients = x_tensor.grad.numpy()[0]
+            importance = np.abs(gradients)
+            importance = importance / (np.sum(importance) + 1e-10)
         
         # Create importance list
         feature_importance = []
@@ -276,6 +308,45 @@ class AccidentRiskPredictor:
         feature_importance.sort(key=lambda x: x['importance'], reverse=True)
         
         return feature_importance
+    
+    def batch_predict(self, features_list: List[Dict]) -> List[Dict]:
+        """Make predictions for multiple records"""
+        results = []
+        for features in features_list:
+            result = self.predict(features)
+            result['input_features'] = features
+            results.append(result)
+        return results
+    
+    def compare_routes(self, route1_features: Dict, route2_features: Dict) -> Dict:
+        """Compare two routes/locations for safety"""
+        pred1 = self.predict(route1_features)
+        pred2 = self.predict(route2_features)
+        
+        # Calculate overall risk scores (weighted by severity)
+        risk_weights = {'slight': 1, 'serious': 2, 'fatal': 3}
+        
+        risk1 = sum(pred1['probabilities'][k] * v for k, v in risk_weights.items())
+        risk2 = sum(pred2['probabilities'][k] * v for k, v in risk_weights.items())
+        
+        safer_route = 1 if risk1 < risk2 else 2
+        risk_difference = abs(risk1 - risk2)
+        
+        return {
+            'route1': {
+                'prediction': pred1,
+                'risk_score': float(risk1),
+                'features': route1_features
+            },
+            'route2': {
+                'prediction': pred2,
+                'risk_score': float(risk2),
+                'features': route2_features
+            },
+            'safer_route': safer_route,
+            'risk_difference': float(risk_difference),
+            'recommendation': f"Route {safer_route} is safer with {risk_difference:.2f} lower risk score"
+        }
     
     def _get_feature_category(self, feature_name: str) -> str:
         """Get the category of a feature"""
