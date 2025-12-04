@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import joblib
 import os
+import shap
 
 class SpatialAttention(nn.Module):
     """Spatial attention mechanism for focusing on location-based features"""
