@@ -2,6 +2,44 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Leaflet Map Styles */
+.leaflet-container {
+    background-color: #1e293b;
+}
+
+.leaflet-popup-content-wrapper {
+    background-color: #1f2937;
+    color: #fff;
+    border-radius: 8px;
+}
+
+.leaflet-popup-tip {
+    background-color: #1f2937;
+}
+
+.leaflet-popup-content {
+    margin: 10px;
+}
+
+.leaflet-control-zoom a {
+    background-color: #334155 !important;
+    color: #fff !important;
+    border-color: #475569 !important;
+}
+
+.leaflet-control-zoom a:hover {
+    background-color: #475569 !important;
+}
+
+.leaflet-control-attribution {
+    background-color: rgba(30, 41, 59, 0.8) !important;
+    color: #94a3b8 !important;
+}
+
+.leaflet-control-attribution a {
+    color: #60a5fa !important;
+}
+
 body {
     margin: 0;
     font-family:
